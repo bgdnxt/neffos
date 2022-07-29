@@ -573,6 +573,16 @@ func (s *Server) Broadcast(exceptSender fmt.Stringer, msgs ...Message) {
 	s.broadcaster.broadcast(msgs)
 }
 
+//SendS2s send the msg to internal/system namespace
+func (s *Server) SendS2s(ctx context.Context, ns *NSConn, msg Message) error {
+	events, ok := s.namespaces[msg.Namespace]
+	if !ok {
+		return ErrBadNamespace
+	}
+	err := events.fireEvent(ns, msg)
+	return err
+}
+
 // Ask is like `Broadcast` but it blocks until a response
 // from a specific connection if "msg.To" is filled otherwise
 // from the first connection which will reply to this "msg".

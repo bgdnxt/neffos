@@ -25,9 +25,14 @@ type Socket struct {
 	state          gobwas.State
 
 	mu sync.Mutex
+
+	//after idleTime not received any MESSAGE/PING/PONG
+	//will send a PING to remote. keepalive
+	//set zero will disable this feature
+	pingPeriod time.Duration
 }
 
-func newSocket(underline net.Conn, request *http.Request, client bool) *Socket {
+func newSocket(underline net.Conn, request *http.Request, client bool, pingPeriod time.Duration) *Socket {
 	state := gobwas.StateServerSide
 	if client {
 		state = gobwas.StateClientSide
@@ -53,6 +58,7 @@ func newSocket(underline net.Conn, request *http.Request, client bool) *Socket {
 		state:          state,
 		reader:         reader,
 		controlHandler: controlHandler,
+		pingPeriod:     pingPeriod,
 	}
 }
 
@@ -68,12 +74,26 @@ func (s *Socket) Request() *http.Request {
 
 // ReadData reads binary or text messages from the remote connection.
 func (s *Socket) ReadData(timeout time.Duration) ([]byte, neffos.MessageType, error) {
+	delayTime := s.pingPeriod
+	var delayTimer *time.Timer
 	for {
 		if timeout > 0 {
 			s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
 		}
 
+		if delayTime > 0 {
+			delayTimer = time.AfterFunc(delayTime, func() {
+				s.WriteOp([]byte(""), gobwas.OpPing, delayTime)
+			})
+		}
+
 		hdr, err := s.reader.NextFrame()
+
+		if delayTimer != nil {
+			delayTimer.Stop()
+			delayTimer = nil
+		}
+
 		if err != nil {
 			if err == io.EOF {
 				return nil, 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
@@ -135,6 +155,10 @@ func (s *Socket) WriteBinary(body []byte, timeout time.Duration) error {
 // WriteText sends a text message to the remote connection.
 func (s *Socket) WriteText(body []byte, timeout time.Duration) error {
 	return s.write(body, gobwas.OpText, timeout)
+}
+
+func (s *Socket) WriteOp(body []byte, op gobwas.OpCode, timeout time.Duration) error {
+	return s.write(body, op, timeout)
 }
 
 func (s *Socket) write(body []byte, op gobwas.OpCode, timeout time.Duration) error {
