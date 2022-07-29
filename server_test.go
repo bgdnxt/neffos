@@ -19,8 +19,13 @@ import (
 )
 
 func runTestServer(addr string, connHandler neffos.ConnHandler, configureServer ...func(*neffos.Server)) func() error {
-	gobwasServer := neffos.New(gobwas.DefaultUpgrader, connHandler)
-	gorillaServer := neffos.New(gorilla.DefaultUpgrader, connHandler)
+	gobwasServer := neffos.New(gobwas.DefaultUpgrader, 0, 0)
+	gobwasServer.RegisterConnHandlers(connHandler)
+	go gobwasServer.Serve()
+
+	gorillaServer := neffos.New(gorilla.DefaultUpgrader, 0, 0)
+	gorillaServer.RegisterConnHandlers(connHandler)
+	go gorillaServer.Serve()
 
 	for _, cfg := range configureServer {
 		cfg(gobwasServer)

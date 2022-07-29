@@ -110,13 +110,14 @@ type Server struct {
 // Use the `Conn#IsClient` on any event callback to determinate if it's a client-side connection or a server-side one.
 //
 // See examples for more.
-func New(upgrader Upgrader, connHandler ConnHandler) *Server {
-	readTimeout, writeTimeout := getTimeouts(connHandler)
-	namespaces := connHandler.GetNamespaces()
+func New(upgrader Upgrader, readTimeout, writeTimeout time.Duration) *Server {
+	// readTimeout, writeTimeout := getTimeouts(connHandler)
+	// namespaces := connHandler.GetNamespaces()
 	s := &Server{
 		uuid:              uuid.Must(uuid.NewV4()).String(),
+		closed:            1,
 		upgrader:          upgrader,
-		namespaces:        namespaces,
+		namespaces:        Namespaces{},
 		readTimeout:       readTimeout,
 		writeTimeout:      writeTimeout,
 		connections:       make(map[*Conn]struct{}),
@@ -128,8 +129,6 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 		waitingMessages:   make(map[string]chan Message),
 		IDGenerator:       DefaultIDGenerator,
 	}
-
-	go s.start()
 
 	return s
 }
@@ -164,8 +163,47 @@ func (s *Server) usesStackExchange() bool {
 	return s.StackExchange != nil
 }
 
-func (s *Server) start() {
-	atomic.StoreUint32(&s.closed, 0)
+func (s *Server) RegisterConnHandlers(connHandlers ...ConnHandler) {
+	if atomic.LoadUint32(&s.closed) == 1 {
+		s.registerConnHandlers(connHandlers...)
+	}
+}
+
+// JoinConnHandlers combines two or more "connHandlers"
+// and returns a result of a single `ConnHandler` that
+// can be passed on the `New` and `Dial` functions.
+func (s *Server) registerConnHandlers(connHandlers ...ConnHandler) {
+	for _, h := range connHandlers {
+		nss := h.GetNamespaces()
+		if len(nss) > 0 {
+			for namespace, events := range nss {
+				if events == nil {
+					continue
+				}
+				clonedEvents := make(Events, len(events))
+				for evt, cb := range events {
+					clonedEvents[evt] = cb
+				}
+
+				if curEvents, exists := s.namespaces[namespace]; exists {
+					// fill missing events.
+					for evt, cb := range clonedEvents {
+						curEvents[evt] = cb
+					}
+
+				} else {
+					s.namespaces[namespace] = clonedEvents
+				}
+			}
+		}
+	}
+}
+
+//Serve the main process loop
+func (s *Server) Serve() {
+	if !atomic.CompareAndSwapUint32(&s.closed, 1, 0) {
+		return
+	}
 
 	for {
 		select {
